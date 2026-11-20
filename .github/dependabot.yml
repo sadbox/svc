@@ -1,0 +1,20 @@
+# Daily. Version updates wait out a 3-day cooldown (a release has to be 3
+# days old, so a compromised or broken one can be caught and yanked first);
+# security updates skip it. The module is standard library only, so gomod
+# has nothing to bump today; it's here so a dependency added later is
+# covered from the start.
+version: 2
+updates:
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 3
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 3
