@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # Run the Go setup-go installed; never download another toolchain.
+  GOTOOLCHAIN: local
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27.4"
+          cache: false # no go.sum: standard library only
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          [ -z "$out" ] || { echo "::error::not gofmt'd: $out"; exit 1; }
+      - name: vet
+        run: go vet ./...
+
+  # Both architectures the services run on, with the services' Go (their
+  # golang build image).
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-26.04, ubuntu-26.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27.4"
+          cache: false # no go.sum: standard library only
+      - run: go version
+      - name: test
+        run: go test -race -count=1 ./...
+
+  govulncheck:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: "1.27.4"
+          cache: false
+      # Pinned by version and bumped by hand (Dependabot doesn't see it),
+      # until the shared sadbox/ci workflows take this job over.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
