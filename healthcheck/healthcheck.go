@@ -39,10 +39,6 @@ const (
 	// It is under every Quadlet unit's HealthTimeout, so a hung server
 	// fails the check with a reason instead of being killed by Podman.
 	DefaultTimeout = 3 * time.Second
-
-	// EnvURL, when set, overrides the URL a service passes to [Main]. It
-	// must still be a loopback http URL.
-	EnvURL = "HEALTHCHECK_URL"
 )
 
 // Requested reports whether the process was started as the health check:
@@ -59,9 +55,8 @@ func requested(args []string) bool {
 	return name == "-healthcheck" || name == "--healthcheck"
 }
 
-// Main returns at once unless [Requested]. If it is, Main probes url (or
-// $HEALTHCHECK_URL, if set) with [Probe] and [DefaultTimeout] and exits
-// the process: 0 if healthy, 1 otherwise, the reason on stderr.
+// Main returns at once unless [Requested]. If it is, Main probes url with
+// [Probe] and [DefaultTimeout] and exits the process: 0 if healthy, 1 otherwise, the reason on stderr.
 //
 // Call it first in main, before flag parsing and anything with a side
 // effect: the check must not load config, read secrets or open a DB.
@@ -70,23 +65,20 @@ func requested(args []string) bool {
 // further arguments fail the check (exit 1) rather than fall through to
 // starting the service.
 func Main(url string) {
-	if code, ok := run(os.Args, os.Getenv, os.Stderr, url, DefaultTimeout); ok {
+	if code, ok := run(os.Args, os.Stderr, url, DefaultTimeout); ok {
 		os.Exit(code)
 	}
 }
 
 // run is Main without the process: it reports whether args asked for the
 // health check and, if so, the exit code.
-func run(args []string, getenv func(string) string, stderr io.Writer, url string, timeout time.Duration) (code int, ok bool) {
+func run(args []string, stderr io.Writer, url string, timeout time.Duration) (code int, ok bool) {
 	if !requested(args) {
 		return 0, false
 	}
 	if len(args) != 2 || strings.Contains(args[1], "=") {
 		fmt.Fprintf(stderr, "healthcheck: usage: %s -healthcheck (no value, no other arguments)\n", args[0])
 		return 1, true
-	}
-	if env := getenv(EnvURL); env != "" {
-		url = env
 	}
 	if err := Probe(url, timeout); err != nil {
 		fmt.Fprintln(stderr, "healthcheck:", err)

@@ -34,8 +34,6 @@ func TestRequested(t *testing.T) {
 	}
 }
 
-func noEnv(string) string { return "" }
-
 // countingServer answers every request with status and counts them.
 func countingServer(t *testing.T, status int) (*httptest.Server, *atomic.Int32) {
 	var n atomic.Int32
@@ -50,13 +48,9 @@ func countingServer(t *testing.T, status int) (*httptest.Server, *atomic.Int32) 
 
 func TestRunNotRequestedHasNoSideEffects(t *testing.T) {
 	srv, hits := countingServer(t, http.StatusOK)
-	getenv := func(k string) string {
-		t.Errorf("read env %s without -healthcheck", k)
-		return ""
-	}
 	for _, args := range [][]string{{"svc"}, {"svc", "-daemon"}, {"svc", "serve", "-healthcheck"}} {
 		var stderr strings.Builder
-		if _, ok := run(args, getenv, &stderr, srv.URL, time.Second); ok {
+		if _, ok := run(args, &stderr, srv.URL, time.Second); ok {
 			t.Errorf("run(%q) took the health check path", args)
 		}
 		if stderr.Len() != 0 {
@@ -72,7 +66,7 @@ func TestRunUsage(t *testing.T) {
 	srv, hits := countingServer(t, http.StatusOK)
 	for _, args := range [][]string{{"svc", "-healthcheck=true"}, {"svc", "--healthcheck", "-config", "x"}} {
 		var stderr strings.Builder
-		code, ok := run(args, noEnv, &stderr, srv.URL, time.Second)
+		code, ok := run(args, &stderr, srv.URL, time.Second)
 		if !ok || code != 1 {
 			t.Errorf("run(%q) = %d, %t; want 1, true", args, code, ok)
 		}
@@ -141,7 +135,7 @@ func TestRun(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var stderr strings.Builder
 			start := time.Now()
-			code, ok := run([]string{"svc", "-healthcheck"}, noEnv, &stderr, tc.url, 200*time.Millisecond)
+			code, ok := run([]string{"svc", "-healthcheck"}, &stderr, tc.url, 200*time.Millisecond)
 			if !ok || code != tc.want {
 				t.Fatalf("run = %d, %t; want %d (stderr %q)", code, ok, tc.want, stderr.String())
 			}
@@ -155,23 +149,6 @@ func TestRun(t *testing.T) {
 				t.Errorf("took %s, past its 200ms timeout", d)
 			}
 		})
-	}
-}
-
-func TestRunEnvOverride(t *testing.T) {
-	ok, hits := countingServer(t, http.StatusOK)
-	getenv := func(k string) string {
-		if k == EnvURL {
-			return ok.URL + Path
-		}
-		return ""
-	}
-	var stderr strings.Builder
-	if code, _ := run([]string{"svc", "-healthcheck"}, getenv, &stderr, "http://127.0.0.1:1/healthz", time.Second); code != 0 {
-		t.Fatalf("exit %d with %s set, stderr %q", code, EnvURL, stderr.String())
-	}
-	if hits.Load() != 1 {
-		t.Errorf("%s not used", EnvURL)
 	}
 }
 
