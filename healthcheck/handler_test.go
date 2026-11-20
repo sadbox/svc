@@ -231,6 +231,44 @@ func TestHandlerLogsChangeOnceConcurrently(t *testing.T) {
 	}
 }
 
+// A client that cancels its request neither fails a check nor changes the
+// logged state: a genuine failure afterwards still logs its WARN.
+func TestHandlerClientCancel(t *testing.T) {
+	logs := captureLog(t)
+	var down atomic.Bool
+	h := Handler(time.Second, Check{"db", func(ctx context.Context) error {
+		if down.Load() {
+			return errors.New("closed")
+		}
+		return ctx.Err() // fails only if the client's cancel reaches the check
+	}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Path, nil).WithContext(ctx))
+	if rec.Code != http.StatusOK {
+		t.Errorf("cancelled request: status %d, want 200 (the check saw the client's cancel)", rec.Code)
+	}
+	if logs.Len() != 0 {
+		t.Errorf("cancelled request logged:\n%s", logs.String())
+	}
+
+	// Cancelled while the check genuinely fails: still no state change.
+	down.Store(true)
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, Path, nil).WithContext(ctx))
+	if logs.Len() != 0 {
+		t.Errorf("cancelled request logged:\n%s", logs.String())
+	}
+
+	if rec, _ := serve(t, h, http.MethodGet); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", rec.Code)
+	}
+	if n := strings.Count(logs.String(), `level=WARN msg="Health check failing" check=db error=closed`); n != 1 {
+		t.Errorf("genuine failure logged %d times, want once:\n%s", n, logs.String())
+	}
+}
+
 // End to end: Probe against Handler over a real loopback listener.
 func TestProbeHandler(t *testing.T) {
 	captureLog(t)

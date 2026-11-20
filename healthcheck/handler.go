@@ -80,7 +80,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body := response{Status: "ok"}
 	status := http.StatusOK
 	errs := h.run(r.Context())
-	h.logChanges(r.Context(), errs)
+	// A client that gave up (a probe past its own timeout) says nothing
+	// about the checks: leave their state, and the log, alone.
+	if r.Context().Err() == nil {
+		h.logChanges(r.Context(), errs)
+	}
 	for i, err := range errs {
 		if err != nil {
 			body.Failing = append(body.Failing, h.checks[i].Name)
@@ -117,7 +121,9 @@ func (h *handler) run(ctx context.Context) []error {
 	if len(h.checks) == 0 {
 		return errs
 	}
-	ctx, cancel := context.WithTimeout(ctx, h.timeout)
+	// The handler's own timeout bounds the checks, not the client: a
+	// cancelled request must not make a check fail.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), h.timeout)
 	defer cancel()
 	type result struct {
 		i   int
