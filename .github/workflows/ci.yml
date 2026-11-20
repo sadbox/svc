@@ -22,7 +22,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: "1.27.x"
+          go-version: "1.27.4"
           cache: false # no go.sum: standard library only
       - name: gofmt
         run: |
@@ -31,15 +31,13 @@ jobs:
       - name: vet
         run: go vet ./...
 
-  # Both architectures the services run on, with the services' Go and with
-  # go.mod's go line (the oldest Go a consumer may build this with).
+  # Both architectures the services run on, with the services' Go (their
+  # golang build image).
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-26.04, ubuntu-26.04-arm]
-        go: [current, go.mod]
-    name: test (${{ matrix.os }}, ${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -48,9 +46,8 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: ${{ matrix.go == 'current' && '1.27.x' || '' }}
-          go-version-file: ${{ matrix.go == 'go.mod' && 'go.mod' || '' }}
-          cache: false
+          go-version: "1.27.4"
+          cache: false # no go.sum: standard library only
       - run: go version
       - name: test
         run: go test -race -count=1 ./...
@@ -64,8 +61,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
-          go-version: "1.27.x"
+          go-version: "1.27.4"
           cache: false
-      # Pinned by version (Dependabot doesn't see it): bump by hand.
+      # Pinned by version and bumped by hand (Dependabot doesn't see it),
+      # until the shared sadbox/ci workflows take this job over.
       - name: govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...

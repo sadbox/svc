@@ -1,3 +1,3 @@
 module github.com/sadbox/svc
 
-go 1.22
+go 1.26
