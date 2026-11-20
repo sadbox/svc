@@ -26,8 +26,7 @@ CLI framework (Caddy's) checks it before delegating.
 
 **What it does.** One `GET` of the service's own health URL, on loopback
 (an `http://` URL with a literal loopback IP; anything else is refused).
-The service passes the URL; `$HEALTHCHECK_URL`, if set, overrides it. It
-uses its own transport (no proxy, no keep-alive), doesn't follow
+The service passes the URL. It uses its own transport (no proxy, no keep-alive), doesn't follow
 redirects, and the whole exchange, body included, is bounded by **3 s**.
 Detection comes before anything else in `main`: no flag parsing, config,
 secrets, DB or network beyond that one request.
@@ -41,7 +40,9 @@ reserves it.
 answers `200 {"status":"ok"}` while healthy and
 `503 {"status":"unhealthy","failing":["db"]}` otherwise, JSON, `Cache-Control:
 no-store`. The body names failing checks but never shows their errors (the
-endpoint may be reachable from outside); errors are logged at WARN. Checks
+endpoint may be reachable from outside). The log gets state changes, not
+every probe: WARN with the error when a check starts failing, INFO when it
+recovers. Checks
 run concurrently under a 2 s budget, under the client's 3 s, so a slow
 check comes back as a 503 that names it.
 
@@ -106,10 +107,9 @@ Releases are tags `vX.Y.Z` on `main`, following semver (pre-1.0: a minor
 bump may break the API). Services pin a release in their `go.mod`, like
 any other dependency, and Dependabot (gomod) proposes the bumps.
 
-The `go` line in `go.mod` is the lowest Go release the code needs (1.22,
-for per-iteration loop variables), not the services' build image, so a
-service on an older `go` line can still import it. CI tests both that and
-the services' current Go.
+The `go` line in `go.mod` is 1.26, the lowest every service is on, not the
+services' build image (Go 1.27.4), so a service can import a release before
+moving its own `go` line. CI tests with the build image's Go.
 
 ## License
 

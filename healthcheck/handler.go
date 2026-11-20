@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -37,9 +38,11 @@ type response struct {
 // up. Other methods get 405.
 //
 // The body names failing checks but never shows their errors: the
-// endpoint may be reachable from outside. Each failure is logged instead,
-// at WARN on slog.Default(), with the check's name and error. A check that
-// panics fails; one still running at the timeout fails as timed out.
+// endpoint may be reachable from outside. They go to slog.Default()
+// instead, on changes only, not every probe: WARN with the error when a
+// check starts failing, INFO when it recovers. Every check starts out
+// counted as passing. A check that panics fails; one still running at the
+// timeout fails as timed out.
 //
 // Handler panics if a check has no name or Func, or two share a name.
 func Handler(timeout time.Duration, checks ...Check) http.Handler {
@@ -57,12 +60,15 @@ func Handler(timeout time.Duration, checks ...Check) http.Handler {
 		seen[c.Name] = true
 	}
 	checks = append([]Check(nil), checks...)
-	return &handler{timeout: timeout, checks: checks}
+	return &handler{timeout: timeout, checks: checks, failing: make([]bool, len(checks))}
 }
 
 type handler struct {
 	timeout time.Duration
 	checks  []Check
+
+	mu      sync.Mutex
+	failing []bool // per check, as of the last request to finish
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -73,9 +79,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	body := response{Status: "ok"}
 	status := http.StatusOK
-	for i, err := range h.run(r.Context()) {
+	errs := h.run(r.Context())
+	h.logChanges(r.Context(), errs)
+	for i, err := range errs {
 		if err != nil {
-			slog.Default().WarnContext(r.Context(), "Health check failed", "check", h.checks[i].Name, "error", err)
 			body.Failing = append(body.Failing, h.checks[i].Name)
 		}
 	}
@@ -86,6 +93,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body)
+}
+
+// logChanges logs each check whose state differs from the last request's.
+// Under the lock, so concurrent requests log a change once.
+func (h *handler) logChanges(ctx context.Context, errs []error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for i, err := range errs {
+		switch failing := err != nil; {
+		case failing && !h.failing[i]:
+			slog.Default().WarnContext(ctx, "Health check failing", "check", h.checks[i].Name, "error", err)
+		case !failing && h.failing[i]:
+			slog.Default().InfoContext(ctx, "Health check recovered", "check", h.checks[i].Name)
+		}
+		h.failing[i] = err != nil
+	}
 }
 
 // run returns each check's result, in order.

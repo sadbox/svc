@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,7 +72,7 @@ func TestHandlerFailing(t *testing.T) {
 	if strings.Contains(rec.Body.String(), "secret") {
 		t.Errorf("body shows a check's error: %s", rec.Body.String())
 	}
-	if !strings.Contains(logs.String(), `level=WARN msg="Health check failed" check=db error="secret dsn in here"`) {
+	if !strings.Contains(logs.String(), `level=WARN msg="Health check failing" check=db error="secret dsn in here"`) {
 		t.Errorf("failure not logged:\n%s", logs.String())
 	}
 }
@@ -161,6 +162,72 @@ func TestHandlerPanicsOnBadChecks(t *testing.T) {
 			}()
 			Handler(0, checks...)
 		})
+	}
+}
+
+// A failing check logs when it starts failing and when it recovers, not
+// on every probe.
+func TestHandlerLogsChangesOnly(t *testing.T) {
+	logs := captureLog(t)
+	var down atomic.Bool
+	h := Handler(time.Second,
+		Check{"db", func(context.Context) error {
+			if down.Load() {
+				return errors.New("closed")
+			}
+			return nil
+		}},
+		Check{"other", pass},
+	)
+	probe := func(want int) {
+		t.Helper()
+		if rec, _ := serve(t, h, http.MethodGet); rec.Code != want {
+			t.Fatalf("status %d, want %d", rec.Code, want)
+		}
+	}
+	probe(http.StatusOK)
+	down.Store(true)
+	probe(http.StatusServiceUnavailable)
+	probe(http.StatusServiceUnavailable)
+	probe(http.StatusServiceUnavailable)
+	down.Store(false)
+	probe(http.StatusOK)
+	probe(http.StatusOK)
+	down.Store(true)
+	probe(http.StatusServiceUnavailable)
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	want := []string{
+		`level=WARN msg="Health check failing" check=db error=closed`,
+		`level=INFO msg="Health check recovered" check=db`,
+		`level=WARN msg="Health check failing" check=db error=closed`,
+	}
+	if len(lines) != len(want) {
+		t.Fatalf("got %d log lines, want %d:\n%s", len(lines), len(want), logs.String())
+	}
+	for i, w := range want {
+		if !strings.HasSuffix(lines[i], w) {
+			t.Errorf("line %d = %s, want suffix %s", i, lines[i], w)
+		}
+	}
+}
+
+// Concurrent probes log a change once.
+func TestHandlerLogsChangeOnceConcurrently(t *testing.T) {
+	logs := captureLog(t)
+	h := Handler(time.Second, Check{"db", func(context.Context) error { return errors.New("closed") }})
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, Path, nil))
+		}()
+	}
+	wg.Wait()
+	if n := strings.Count(logs.String(), "Health check failing"); n != 1 {
+		t.Errorf("logged %d times, want once:\n%s", n, logs.String())
 	}
 }
 
