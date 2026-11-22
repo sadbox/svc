@@ -47,19 +47,34 @@ func keepSpanAttr(kv attribute.KeyValue) bool {
 
 // urlRE matches an http(s) URL in free text (an error's message: *url.Error
 // quotes the whole URL), any case, up to whitespace or a quote: group 1 is
-// the scheme, group 2 the authority (userinfo@host:port), the rest is path,
-// query and fragment.
-var urlRE = regexp.MustCompile(`(?i)(https?://)([^/\s"'?#]*)[^\s"']*`)
+// the scheme, group 2 the authority as a URL parser reads it (up to the
+// first '/', '?' or '#'), group 3 the rest.
+var urlRE = regexp.MustCompile(`(?i)(https?://)([^/\s"'?#]*)([^\s"']*)`)
+
+// hostRE is what a host may look like once scrubbed: a name or IPv4
+// address, or a bracketed IPv6 address, with an optional numeric port.
+var hostRE = regexp.MustCompile(`^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::[0-9]+)?$`)
+
+// redactedHost stands in for a host that can't be told apart from
+// credentials.
+const redactedHost = "[redacted]"
 
 // scrubURLs cuts every URL in s down to its scheme and host: credentials,
-// path and query are where the secrets are. The host is what follows the
-// authority's last '@', as a URL parser reads it, so no part of a userinfo
-// survives however many '@' it holds.
+// path and query are where the secrets are. It errs toward redacting:
+//   - the host is what follows the authority's last '@', so no part of a
+//     userinfo survives however many '@' it holds;
+//   - an '@' after the authority (an unencoded '/' in a password, or an
+//     email address in the path) makes the authority ambiguous: the host
+//     is redacted;
+//   - so is anything left that isn't host[:port].
 func scrubURLs(s string) string {
 	return urlRE.ReplaceAllStringFunc(s, func(u string) string {
 		m := urlRE.FindStringSubmatch(u)
-		scheme, authority := m[1], m[2]
+		scheme, authority, rest := m[1], m[2], m[3]
 		host := authority[strings.LastIndex(authority, "@")+1:]
+		if strings.Contains(rest, "@") || !hostRE.MatchString(host) {
+			host = redactedHost
+		}
 		return scheme + host + "/…"
 	})
 }
