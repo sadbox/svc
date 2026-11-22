@@ -144,7 +144,9 @@ func observeLastSuccess(_ context.Context, o metric.Float64Observer) error {
 }
 
 // NewJob returns the Job called name. Keep names few and fixed
-// ("sync_pass", "save_guilds"): each is a label value.
+// ("sync_pass", "save_guilds"): each is a label value. Make a service's
+// Jobs before [Start] (package-level vars), so Start's first export
+// reports them at 0 before anything runs.
 func NewJob(name string) *Job {
 	jobs.once.Do(initJobInstruments)
 	jobs.Lock()

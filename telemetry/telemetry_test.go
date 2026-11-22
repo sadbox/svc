@@ -464,6 +464,12 @@ func TestStartExports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mu.Lock()
+	initial := got["/v1/metrics"]
+	mu.Unlock()
+	if initial == 0 {
+		t.Error("Start returned before its initial metrics export")
+	}
 	_, span := otel.Tracer("t").Start(context.Background(), "s")
 	span.End()
 	shutdown()
