@@ -46,13 +46,15 @@ func keepSpanAttr(kv attribute.KeyValue) bool {
 }
 
 // urlRE matches an http(s) URL in free text (an error's message: *url.Error
-// quotes the whole URL), up to whitespace or a quote.
-var urlRE = regexp.MustCompile(`(https?://[^/\s"'?#]+)[^\s"']*`)
+// quotes the whole URL), up to whitespace or a quote, any case: group 1 is
+// the scheme, an optional userinfo (credentials) is skipped, group 2 is the
+// host.
+var urlRE = regexp.MustCompile(`(?i)(https?://)(?:[^/\s"'?#@]*@)?([^/\s"'?#@]+)[^\s"']*`)
 
-// scrubURLs cuts every URL in s down to its scheme and host: the path and
-// query are where the secrets are.
+// scrubURLs cuts every URL in s down to its scheme and host: credentials,
+// path and query are where the secrets are.
 func scrubURLs(s string) string {
-	return urlRE.ReplaceAllString(s, "$1/…")
+	return urlRE.ReplaceAllString(s, "${1}${2}/…")
 }
 
 // redactingExporter applies the rules above to every span on its way out:

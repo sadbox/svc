@@ -135,6 +135,10 @@ func TestScrubURLs(t *testing.T) {
 		`Post "https://discord.com/api/v10/webhooks/123/SECRET?wait=true": EOF`: `Post "https://discord.com/…": EOF`,
 		`get http://10.0.0.1:9000/a?X-Amz-Signature=abc failed`:                 `get http://10.0.0.1:9000/… failed`,
 		`no url here`: `no url here`,
+		`dial https://user:pass@db.example/x failed`: `dial https://db.example/… failed`,
+		`"https://tok@hooks.example/a?b=c"`:          `"https://hooks.example/…"`,
+		`HTTPS://API.EXAMPLE/v1/secret?k=v`:          `HTTPS://API.EXAMPLE/…`,
+		`Http://u@h:8080`:                            `Http://h:8080/…`,
 	} {
 		if got := scrubURLs(in); got != want {
 			t.Errorf("scrubURLs(%q) = %q, want %q", in, got, want)
