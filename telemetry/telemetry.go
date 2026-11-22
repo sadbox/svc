@@ -119,6 +119,18 @@ func Start(ctx context.Context, service string) (shutdown func(), err error) {
 		return nil, fmt.Errorf("telemetry: runtime metrics: %w", err)
 	}
 
+	// One export now, before the service does any work: every Job made so
+	// far (package-level vars) reports its runs at 0. Without it a process
+	// whose job succeeds before the first periodic export (60s) shows its
+	// counter first at 1, and after a predecessor that had also reached 1,
+	// a 1 -> 1 across the restart reads as no success at all (Prometheus
+	// sees no reset). Bounded; a collector that's down costs a warning.
+	fctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
+	defer cancel()
+	if err := mp.ForceFlush(fctx); err != nil {
+		slog.Warn("telemetry: initial export", "err", scrubURLs(err.Error()))
+	}
+
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
