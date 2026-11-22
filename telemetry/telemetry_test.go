@@ -317,6 +317,9 @@ func TestJob(t *testing.T) {
 	if g := lastSuccessPoints(t, h, "test_job"); len(g) != 0 {
 		t.Fatalf("gauge observed before first success: %v", g)
 	}
+	if r := runPoints(t, h, "test_job"); len(r) != 2 || r["success"] != 0 || r["failure"] != 0 {
+		t.Fatalf("runs before any run = %v, want both outcomes at 0", r)
+	}
 
 	boom := errors.New("boom")
 	if err := j.Run(context.Background(), func(context.Context) error { return boom }); !errors.Is(err, boom) {
@@ -340,6 +343,11 @@ func TestJob(t *testing.T) {
 		}()
 		_ = j.Run(context.Background(), func(context.Context) error { panic("p") })
 	}()
+
+	runs := runPoints(t, h, "test_job")
+	if runs["success"] != 1 || runs["failure"] != 2 {
+		t.Errorf("runs counter = %v, want success 1, failure 2", runs)
+	}
 
 	counts := map[string]uint64{}
 	for _, p := range histPoints(t, h.metrics(t)[jobDurationName]) {
@@ -453,5 +461,46 @@ func TestStartExports(t *testing.T) {
 	defer mu.Unlock()
 	if got["/v1/traces"] == 0 || got["/v1/metrics"] == 0 {
 		t.Errorf("collector got %v, want /v1/traces and /v1/metrics", got)
+	}
+}
+
+func runPoints(t *testing.T, h *harness, name string) map[string]int64 {
+	t.Helper()
+	out := map[string]int64{}
+	a, ok := h.metrics(t)[jobRunsName]
+	if !ok {
+		return out
+	}
+	sum := a.(metricdata.Sum[int64])
+	if !sum.IsMonotonic || sum.Temporality != metricdata.CumulativeTemporality {
+		t.Errorf("runs: monotonic %v, temporality %v", sum.IsMonotonic, sum.Temporality)
+	}
+	for _, p := range sum.DataPoints {
+		if v, _ := p.Attributes.Value(JobName); v.AsString() == name {
+			o, _ := p.Attributes.Value("outcome")
+			out[o.AsString()] = p.Value
+		}
+	}
+	return out
+}
+
+func TestJobSeed(t *testing.T) {
+	h := newHarness(t)
+	j := NewJob("seeded")
+	old := time.Unix(1_700_000_000, 0)
+	j.Seed(old)
+	j.Seed(old.Add(-time.Hour)) // older: ignored
+	if !j.LastSuccess().Equal(old) {
+		t.Errorf("LastSuccess = %v, want %v", j.LastSuccess(), old)
+	}
+	if g := lastSuccessPoints(t, h, "seeded"); len(g) != 1 || g[0] != float64(old.Unix()) {
+		t.Errorf("gauge = %v", g)
+	}
+	if r := runPoints(t, h, "seeded"); r["success"] != 0 {
+		t.Errorf("Seed counted a run: %v", r)
+	}
+	j.Succeeded()
+	if !j.LastSuccess().After(old) {
+		t.Error("Succeeded didn't move past the seed")
 	}
 }

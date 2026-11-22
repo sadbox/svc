@@ -64,13 +64,21 @@ metric labels.
 | --- | --- | --- |
 | `http_server_request_duration_seconds` | `http_request_method`, `http_response_status_code`, `http_route` | `Handler` |
 | `http_client_request_duration_seconds` | `http_request_method`, `http_response_status_code`, `peer_service` | `Transport` |
-| `sadbox_job_duration_seconds` | `job_name`, `outcome` (`success`/`failure`) | `Job.Run` |
-| `sadbox_job_last_success_timestamp_seconds` | `job_name` | `Job.Run`, `Job.Succeeded` |
+| `sadbox_job_runs_total` | `job_name`, `outcome` (`success`/`failure`) | `Job.Run`, `Job.Succeeded` |
+| `sadbox_job_duration_seconds` | `job_name`, `outcome` | `Job.Run` |
+| `sadbox_job_last_success_timestamp_seconds` | `job_name` | `Job.Run`, `Job.Succeeded`, `Job.Seed` |
 | `go_*` runtime metrics | | `Start` |
 
 `job` and `instance` come from `service.namespace`/`service.name` and
-`service.instance.id`. A job's last-success gauge is absent until its first
-success in the process: an alert on it treats no data as stale.
+`service.instance.id`.
+
+**"Has it succeeded lately" keys on the counter**, not the gauge:
+`increase(sadbox_job_runs_total{outcome="success"}[<window>]) < 1`. Each
+success is an increment Prometheus keeps, so a restart (a counter reset,
+which `increase` handles) loses none, and both outcomes read 0 from a
+process's first export, so the first success is a visible step. The gauge
+lives in the process and is absent after a restart until the next success
+(or a `Job.Seed` from the service's own records): it is for dashboards.
 
 ## Health check standard
 
