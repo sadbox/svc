@@ -16,8 +16,14 @@ import (
 //     webhook and interaction tokens, S3 presigned signatures);
 //   - url.path, url.query: inbound paths carry user IDs (sprobot-web's
 //     profiles) and login links (towngear); http.route says which handler;
-//   - user_agent.original, client.address, network.peer.*: visitors.
+//   - user_agent.original, client.address, network.peer.*: visitors;
+//   - exception.message, exception.stacktrace: an error's text can hold
+//     anything (oncall-sync's name people, numbers and addresses);
+//     exception.type stays, and the text is in the service's log, linked by
+//     trace_id (LogHandler).
 var droppedSpanKeys = map[attribute.Key]bool{
+	"exception.message":    true,
+	"exception.stacktrace": true,
 	"url.full":             true,
 	"url.path":             true,
 	"url.query":            true,
@@ -80,8 +86,8 @@ func scrubURLs(s string) string {
 }
 
 // redactingExporter applies the rules above to every span on its way out:
-// attributes (span, event and link), the status description, and event
-// string values (exception.message holds an error's text).
+// attributes (span, event and link; URLs scrubbed from the string values
+// kept), and the status description (dropped).
 type redactingExporter struct {
 	sdktrace.SpanExporter
 }
@@ -105,9 +111,11 @@ func (s redactedSpan) Attributes() []attribute.KeyValue {
 	return redactAttrs(s.ReadOnlySpan.Attributes())
 }
 
+// Status keeps the code and drops the description: like exception.message,
+// it's an error's free text.
 func (s redactedSpan) Status() sdktrace.Status {
 	st := s.ReadOnlySpan.Status()
-	st.Description = scrubURLs(st.Description)
+	st.Description = ""
 	return st
 }
 

@@ -180,8 +180,10 @@ func (j *Job) finish(span trace.Span, start time.Time, err error) {
 	outcome := outcomeSuccess
 	if err != nil {
 		outcome = outcomeFailure
+		// The error's type only: its text stays in the service's log (and
+		// the exporter would drop it anyway, redact.go).
 		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, "")
 		j.mu.Lock()
 		j.failures++
 		j.mu.Unlock()

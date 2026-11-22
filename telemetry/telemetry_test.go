@@ -175,6 +175,17 @@ func TestRedactingExporter(t *testing.T) {
 	if !hasKey(s.Attributes, "http.route") {
 		t.Error("http.route dropped")
 	}
+	if s.Status.Description != "" {
+		t.Errorf("status description exported: %q", s.Status.Description)
+	}
+	for _, ev := range s.Events {
+		if hasKey(ev.Attributes, "exception.message") {
+			t.Error("exception.message exported")
+		}
+		if !hasKey(ev.Attributes, "exception.type") {
+			t.Error("exception.type dropped")
+		}
+	}
 	all := s.Status.Description
 	for _, kv := range s.Attributes {
 		all += " " + kv.Value.String()

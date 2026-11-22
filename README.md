@@ -51,8 +51,10 @@ helpers record into OpenTelemetry's no-ops.
 
 **What never leaves the process.** Enforced in `telemetry`, not left to
 each service: spans lose `url.full`, `url.path`, `url.query`, the user
-agent, client and peer addresses and any captured headers, and every URL
-in an error or status text is cut to scheme and host. HTTP metrics keep
+agent, client and peer addresses, any captured headers, and all error
+text (status descriptions, `exception.message` and stack traces; the
+error's type stays, and its text is in the log, linked by `trace_id`).
+URLs left in any other string attribute are cut to scheme and host. HTTP metrics keep
 only method, status, route (server) or `peer.service` (client), and
 `error.type`. Don't put IDs (Discord users, guilds, phone numbers, email
 addresses), message content or request bodies in span attributes or
