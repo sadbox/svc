@@ -521,3 +521,28 @@ func TestJobSeed(t *testing.T) {
 		t.Error("Succeeded didn't move past the seed")
 	}
 }
+
+// A fetch client's span (a user-supplied URL) loses the host; a fixed
+// API's keeps it.
+func TestFetchPeerHostDropped(t *testing.T) {
+	h := newHarness(t)
+	up := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer up.Close()
+	for _, peer := range []string{FetchPeer, "discord"} {
+		resp, err := Client(peer, nil).Get(up.URL + "/x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	got := map[string]bool{}
+	for _, s := range h.spans.GetSpans() {
+		got[s.Name] = hasKey(s.Attributes, "server.address")
+	}
+	if has, ok := got["fetch GET"]; !ok || has {
+		t.Errorf("fetch span: present %v, server.address kept %v", ok, has)
+	}
+	if has, ok := got["discord GET"]; !ok || !has {
+		t.Errorf("discord span: present %v, server.address kept %v (want kept)", ok, has)
+	}
+}

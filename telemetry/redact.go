@@ -108,7 +108,31 @@ type redactedSpan struct {
 }
 
 func (s redactedSpan) Attributes() []attribute.KeyValue {
-	return redactAttrs(s.ReadOnlySpan.Attributes())
+	attrs := redactAttrs(s.ReadOnlySpan.Attributes())
+	if !userChosenPeer(attrs) {
+		return attrs
+	}
+	out := attrs[:0]
+	for _, kv := range attrs {
+		if kv.Key != "server.address" && kv.Key != "server.port" {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// FetchPeer is the peer name for clients that fetch URLs users supply
+// (sprobot's image fetches). Their spans lose server.address and
+// server.port: the host is the user's choice, unlike a fixed API's.
+const FetchPeer = "fetch"
+
+func userChosenPeer(attrs []attribute.KeyValue) bool {
+	for _, kv := range attrs {
+		if kv.Key == PeerService && kv.Value.AsString() == FetchPeer {
+			return true
+		}
+	}
+	return false
 }
 
 // Status keeps the code and drops the description: like exception.message,
