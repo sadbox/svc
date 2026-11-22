@@ -1,7 +1,10 @@
 # svc
 
 Code shared by sadbox's Go services (sprobot, sadbox.org, oncall-sync,
-towngear, rproxy). Standard library only.
+towngear, rproxy). The root module is standard library only;
+[`telemetry`](telemetry) is a module of its own
+(`github.com/sadbox/svc/telemetry`, tagged `telemetry/vX.Y.Z`), so its
+OpenTelemetry dependencies reach only the services that import it.
 
 Only what the services genuinely share today goes here: each package
 replaces code that is copied, or hand-rolled slightly differently, in
@@ -11,6 +14,63 @@ more than one of them.
 | --- | --- |
 | [`healthcheck`](healthcheck) | The `-healthcheck` flag (container health client) and the `/healthz` handler |
 | [`logging`](logging) | The slog text-format setup, `LOG_LEVEL`, `Fatal` |
+| [`telemetry`](telemetry) | OpenTelemetry metrics and traces over OTLP to the host's Alloy: `Start`, `Handler`, `Transport`/`Client`, `Job`, `LogHandler` |
+
+## Telemetry standard
+
+Every service pushes metrics and traces over OTLP/HTTP to Alloy on bonnet
+(native, on the host); Alloy forwards them to Grafana Cloud. Nothing is
+scraped from the services and no service publishes a port for it.
+
+**Setup.** `shutdown, err := telemetry.Start(ctx, "<service>")` in `main`,
+after `healthcheck.Main` (the health client must stay free of it), and
+`defer shutdown()`. Configuration is the standard `OTEL_*` environment, set
+by the Quadlet unit:
+
+```ini
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://<network gateway>:4318
+Environment=OTEL_RESOURCE_ATTRIBUTES=service.namespace=sadbox,service.instance.id=bonnet,deployment.environment.name=prod
+```
+
+Without an endpoint (tests, local runs) `Start` does nothing and the
+helpers record into OpenTelemetry's no-ops.
+
+**What each service instruments.**
+- Inbound HTTP: `telemetry.Handler(mux, "<service>")` around the
+  ServeMux. Route-labelled (`r.Pattern`), `/healthz` excluded; rproxy's
+  `traceparent` continues the edge trace.
+- Outbound HTTP: `telemetry.Transport("<peer>", base)` (or `Client`) on
+  every client that calls a dependency, `<peer>` a fixed name (`discord`,
+  `s3`, `ringcentral`, `graph`, `pushover`, ...). No trace context is sent
+  to third parties.
+- Background work: one `telemetry.NewJob("<name>")` per loop, task or
+  heartbeat condition; `Run` around each pass, or `Succeeded` where a
+  condition (not a run) used to ping a heartbeat.
+- Logs: `telemetry.LogHandler` around the slog handler, and the `*Context`
+  slog calls inside a request or job, so a line carries its `trace_id`.
+
+**What never leaves the process.** Enforced in `telemetry`, not left to
+each service: spans lose `url.full`, `url.path`, `url.query`, the user
+agent, client and peer addresses and any captured headers, and every URL
+in an error or status text is cut to scheme and host. HTTP metrics keep
+only method, status, route (server) or `peer.service` (client), and
+`error.type`. Don't put IDs (Discord users, guilds, phone numbers, email
+addresses), message content or request bodies in span attributes or
+metric labels.
+
+**Metric names** (as Prometheus shows them):
+
+| Metric | Labels | From |
+| --- | --- | --- |
+| `http_server_request_duration_seconds` | `http_request_method`, `http_response_status_code`, `http_route` | `Handler` |
+| `http_client_request_duration_seconds` | `http_request_method`, `http_response_status_code`, `peer_service` | `Transport` |
+| `sadbox_job_duration_seconds` | `job_name`, `outcome` (`success`/`failure`) | `Job.Run` |
+| `sadbox_job_last_success_timestamp_seconds` | `job_name` | `Job.Run`, `Job.Succeeded` |
+| `go_*` runtime metrics | | `Start` |
+
+`job` and `instance` come from `service.namespace`/`service.name` and
+`service.instance.id`. A job's last-success gauge is absent until its first
+success in the process: an alert on it treats no data as stale.
 
 ## Health check standard
 
