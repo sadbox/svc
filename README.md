@@ -54,7 +54,9 @@ each service: spans lose `url.full`, `url.path`, `url.query`, the user
 agent, client and peer addresses, any captured headers, and all error
 text (status descriptions, `exception.message` and stack traces; the
 error's type stays, and its text is in the log, linked by `trace_id`).
-URLs left in any other string attribute are cut to scheme and host. HTTP metrics keep
+URLs left in any other string attribute are cut to scheme and host. A client
+for URLs users supply uses the peer name `fetch` (`telemetry.FetchPeer`): its
+spans lose `server.address` and `server.port` too. HTTP metrics keep
 only method, status, route (server) or `peer.service` (client), and
 `error.type`. Don't put IDs (Discord users, guilds, phone numbers, email
 addresses), message content or request bodies in span attributes or
