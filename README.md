@@ -22,10 +22,16 @@ Every service pushes metrics and traces over OTLP/HTTP to Alloy on bonnet
 (native, on the host); Alloy forwards them to Grafana Cloud. Nothing is
 scraped from the services and no service publishes a port for it.
 
-**Setup.** `shutdown, err := telemetry.Start(ctx, "<service>")` in `main`,
-after `healthcheck.Main` (the health client must stay free of it), and
-`defer shutdown()`. Configuration is the standard `OTEL_*` environment, set
-by the Quadlet unit:
+**Setup.** `shutdown, err := telemetry.Start(ctx, "<service>",
+telemetry.WithVersion(version))` in `main`, after `healthcheck.Main` (the
+health client must stay free of it), and `defer shutdown()`. `version` is
+the short commit SHA the image was built from, stamped into the service's
+own `main` package by its Dockerfile (`ARG VERSION`, `-ldflags "-X
+main.version=${VERSION}"`, the publish workflow's `build-args`): it becomes
+`service.version` on every metric and span, so builds can be compared. The
+build context never holds `.git`, so nothing else can know it; a start
+without it logs a warning. Configuration is the standard `OTEL_*`
+environment, set by the Quadlet unit:
 
 ```ini
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://<network gateway>:4318
