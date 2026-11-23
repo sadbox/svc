@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
 
 // harness installs global providers wired as Start wires them (the
@@ -441,13 +443,21 @@ func TestStartExports(t *testing.T) {
 	newHarness(t) // the shared providers, restored below
 	var mu sync.Mutex
 	got := map[string]int{}
+	var bodies bytes.Buffer
 	col := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		got[r.URL.Path]++
+		_, _ = io.Copy(&bodies, r.Body)
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-protobuf")
 	}))
 	defer col.Close()
+	t.Setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	t.Setenv("OTEL_SDK_DISABLED", "")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", col.URL)
 	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
@@ -460,7 +470,7 @@ func TestStartExports(t *testing.T) {
 		otel.SetTextMapPropagator(prop)
 	})
 
-	shutdown, err := Start(context.Background(), "telemetry-test")
+	shutdown, err := Start(context.Background(), "telemetry-test", WithVersion("v3rs10n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -478,6 +488,84 @@ func TestStartExports(t *testing.T) {
 	defer mu.Unlock()
 	if got["/v1/traces"] == 0 || got["/v1/metrics"] == 0 {
 		t.Errorf("collector got %v, want /v1/traces and /v1/metrics", got)
+	}
+	// Uncompressed protobuf: the resource's service.version is in it as is.
+	if !bytes.Contains(bodies.Bytes(), []byte("v3rs10n")) {
+		t.Error("the version given to WithVersion never reached the collector")
+	}
+	if strings.Contains(logs.String(), "no service.version") {
+		t.Errorf("warned about a missing version that was given:\n%s", logs.String())
+	}
+}
+
+// A start with no version from anywhere says so (once, in the log): the
+// way every image lost its service.version unnoticed.
+func TestStartWarnsWithoutVersion(t *testing.T) {
+	if buildRevision() != "" {
+		t.Skip("this test binary has a VCS revision")
+	}
+	newHarness(t)
+	col := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+	}))
+	defer col.Close()
+	t.Setenv("OTEL_SDK_DISABLED", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", col.URL)
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	tp, mp, prop := otel.GetTracerProvider(), otel.GetMeterProvider(), otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		otel.SetTracerProvider(tp)
+		otel.SetMeterProvider(mp)
+		otel.SetTextMapPropagator(prop)
+	})
+
+	shutdown, err := Start(context.Background(), "telemetry-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shutdown()
+	if n := strings.Count(logs.String(), "no service.version"); n != 1 {
+		t.Errorf("%d warnings about the missing version, want 1:\n%s", n, logs.String())
+	}
+}
+
+func TestResourceVersion(t *testing.T) {
+	version := func(t *testing.T, given string) (string, bool) {
+		t.Helper()
+		res, err := newResource(context.Background(), "telemetry-test", given)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, ok := res.Set().Value(semconv.ServiceVersionKey)
+		return v.AsString(), ok
+	}
+
+	if got, ok := version(t, "abc1234"); !ok || got != "abc1234" {
+		t.Errorf("WithVersion(abc1234): service.version %q (set %v)", got, ok)
+	}
+
+	// No version given: the build's VCS revision, when it has one (a test
+	// binary has none; a `go build` in a checkout does).
+	got, ok := version(t, "")
+	if want := buildRevision(); got != want || ok != (want != "") {
+		t.Errorf("no version: service.version %q (set %v), want the VCS revision %q", got, ok, want)
+	}
+
+	// The build's own word wins over the environment's.
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "service.version=fromenv,service.namespace=sadbox")
+	if got, _ := version(t, "abc1234"); got != "abc1234" {
+		t.Errorf("WithVersion against OTEL_RESOURCE_ATTRIBUTES: service.version %q, want abc1234", got)
+	}
+	if want := buildRevision(); want == "" {
+		if got, _ := version(t, ""); got != "fromenv" {
+			t.Errorf("no version, no VCS revision: service.version %q, want the environment's", got)
+		}
 	}
 }
 

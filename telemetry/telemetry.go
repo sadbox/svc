@@ -63,10 +63,31 @@ func Enabled() bool {
 	return false
 }
 
+// Option adjusts [Start].
+type Option func(*options)
+
+type options struct {
+	version string
+}
+
+// WithVersion sets service.version: the build the process is, as the
+// service itself knows it (the short commit SHA its image was built from,
+// the 7 characters of the image's sha-<7> tag). Every metric and span then
+// says which build produced it, so two builds can be compared.
+//
+// A service passes the version its build stamps into it (a -ldflags -X
+// variable of its own main package, from a build argument). Without this
+// option, or with "", Start falls back to the binary's VCS revision, which
+// an image build has only when .git is in its build context: ours never
+// is, hence the option. With neither, Start says so in the log.
+func WithVersion(v string) Option {
+	return func(o *options) { o.version = v }
+}
+
 // Start installs the global MeterProvider, TracerProvider and W3C trace
 // context propagator, and starts the Go runtime metrics. service is the
 // default service.name; OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES
-// override it.
+// override it. [WithVersion] gives service.version.
 //
 // The returned function flushes and stops both providers (bounded by a few
 // seconds); call it on the way out. When export isn't enabled ([Enabled])
@@ -75,14 +96,23 @@ func Enabled() bool {
 // Export failures (the collector down) never fail the service: the SDK
 // drops what it can't send and reports through [otel.SetErrorHandler],
 // which Start points at slog.
-func Start(ctx context.Context, service string) (shutdown func(), err error) {
+func Start(ctx context.Context, service string, opts ...Option) (shutdown func(), err error) {
 	if !Enabled() {
 		return func() {}, nil
 	}
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 
-	res, err := newResource(ctx, service)
+	res, err := newResource(ctx, service, o.version)
 	if err != nil {
 		return nil, err
+	}
+	// Loud, once per start: series with no version can't be told apart by
+	// build, and nothing else would show that a build lost its version.
+	if _, ok := res.Set().Value(semconv.ServiceVersionKey); !ok {
+		slog.Warn("telemetry: no service.version: pass telemetry.WithVersion (this build has no VCS revision either)")
 	}
 
 	spanExp, err := otlptracehttp.New(ctx)
@@ -141,16 +171,22 @@ func Start(ctx context.Context, service string) (shutdown func(), err error) {
 }
 
 // newResource describes the process: service.name (the default given,
-// overridable from the environment), service.version from the build's VCS
-// revision, plus whatever OTEL_RESOURCE_ATTRIBUTES adds. No host detector:
-// a container's hostname is its ID, which changes on every restart and
-// would start new series each time; service.instance.id comes from the
-// unit's environment instead.
-func newResource(ctx context.Context, service string) (*resource.Resource, error) {
+// overridable from the environment), service.version (version, or with ""
+// the build's VCS revision, or with neither none), plus whatever
+// OTEL_RESOURCE_ATTRIBUTES adds. No host detector: a container's hostname
+// is its ID, which changes on every restart and would start new series
+// each time; service.instance.id comes from the unit's environment
+// instead.
+func newResource(ctx context.Context, service, version string) (*resource.Resource, error) {
 	attrs := resource.WithAttributes(semconv.ServiceName(service))
 	opts := []resource.Option{attrs, resource.WithFromEnv(), resource.WithTelemetrySDK()}
-	if v := buildRevision(); v != "" {
-		opts = append(opts, resource.WithAttributes(semconv.ServiceVersion(v)))
+	if version == "" {
+		version = buildRevision()
+	}
+	// After WithFromEnv: what the build says it is wins over a
+	// service.version in the environment.
+	if version != "" {
+		opts = append(opts, resource.WithAttributes(semconv.ServiceVersion(version)))
 	}
 	// WithFromEnv comes after the default name so OTEL_SERVICE_NAME and
 	// OTEL_RESOURCE_ATTRIBUTES win.
