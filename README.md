@@ -14,12 +14,13 @@ more than one of them.
 | --- | --- |
 | [`healthcheck`](healthcheck) | The `-healthcheck` flag (container health client) and the `/healthz` handler |
 | [`logging`](logging) | The slog text-format setup, `LOG_LEVEL`, `Fatal` |
-| [`telemetry`](telemetry) | OpenTelemetry metrics and traces over OTLP to the host's Alloy: `Start`, `Handler`, `Transport`/`Client`, `Job`, `LogHandler` |
+| [`telemetry`](telemetry) | OpenTelemetry metrics and traces over OTLP, and continuous profiles, to the host's Alloy: `Start`, `Handler`, `Transport`/`Client`, `Job`, `LogHandler` |
 
 ## Telemetry standard
 
-Every service pushes metrics and traces over OTLP/HTTP to Alloy on bonnet
-(native, on the host); Alloy forwards them to Grafana Cloud. Nothing is
+Every service pushes metrics and traces over OTLP/HTTP, and profiles
+(Pyroscope's push protocol), to Alloy on bonnet (native, on the host);
+Alloy forwards them to Grafana Cloud. Nothing is
 scraped from the services and no service publishes a port for it.
 
 **Setup.** `shutdown, err := telemetry.Start(ctx, "<service>",
@@ -36,10 +37,19 @@ environment, set by the Quadlet unit:
 ```ini
 Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://<network gateway>:4318
 Environment=OTEL_RESOURCE_ATTRIBUTES=service.namespace=sadbox,service.instance.id=bonnet,deployment.environment.name=prod
+Environment=PYROSCOPE_SERVER_ADDRESS=http://<network gateway>:4040
 ```
 
 Without an endpoint (tests, local runs) `Start` does nothing and the
 helpers record into OpenTelemetry's no-ops.
+
+**Profiles.** With `PYROSCOPE_SERVER_ADDRESS` set, `Start` also runs the
+continuous profiler: CPU, heap (in use and allocated) and goroutines,
+uploaded every 15s. A profile's `service_name` is the service's
+`service.name`, tagged `service_namespace` and `service_version` only.
+Unset, nothing is profiled; a bad address logs a warning and the service
+starts anyway. Stack frames are function names, never data, so nothing
+needs redacting; don't add pprof labels holding IDs or content.
 
 **What each service instruments.**
 - Inbound HTTP: `telemetry.Handler(mux, "<service>")` around the

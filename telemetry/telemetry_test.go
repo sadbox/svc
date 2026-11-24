@@ -634,3 +634,83 @@ func TestFetchPeerHostDropped(t *testing.T) {
 		t.Errorf("discord span: present %v, server.address kept %v (want kept)", ok, has)
 	}
 }
+
+// With PYROSCOPE_SERVER_ADDRESS set, Start profiles and the shutdown it
+// returns uploads: named by service.name, tagged with the namespace and
+// version and nothing else.
+func TestStartProfiles(t *testing.T) {
+	newHarness(t)
+	col := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-protobuf")
+	}))
+	defer col.Close()
+	var mu sync.Mutex
+	var names []string
+	prof := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		if r.URL.Path == "/ingest" {
+			names = append(names, r.URL.Query().Get("name"))
+		}
+		mu.Unlock()
+		_, _ = io.Copy(io.Discard, r.Body)
+	}))
+	defer prof.Close()
+	t.Setenv("OTEL_SDK_DISABLED", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", col.URL)
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "")
+	t.Setenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "")
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "service.namespace=sadbox,service.instance.id=bonnet")
+	t.Setenv("OTEL_SERVICE_NAME", "")
+	t.Setenv(ProfileAddressEnv, prof.URL)
+	tp, mp, prop := otel.GetTracerProvider(), otel.GetMeterProvider(), otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(tp)
+		otel.SetMeterProvider(mp)
+		otel.SetTextMapPropagator(prop)
+	})
+
+	shutdown, err := Start(context.Background(), "telemetry-test", WithVersion("v3rs10n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	shutdown()
+	if d := time.Since(start); d > 2*shutdownTimeout {
+		t.Errorf("shutdown took %v", d)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(names) == 0 {
+		t.Fatal("no profile reached the server")
+	}
+	for _, n := range names {
+		base, labels, ok := strings.Cut(strings.TrimSuffix(n, "}"), "{")
+		if !ok || !strings.HasPrefix(base, "telemetry-test") {
+			t.Errorf("profile name %q, want telemetry-test.<type>{...}", n)
+			continue
+		}
+		got := map[string]bool{}
+		for _, l := range strings.Split(labels, ",") {
+			got[l] = true
+		}
+		for _, want := range []string{"service_namespace=sadbox", "service_version=v3rs10n"} {
+			if !got[want] {
+				t.Errorf("profile %q lacks %s", n, want)
+			}
+		}
+		for l := range got {
+			if strings.Contains(l, "bonnet") || strings.HasPrefix(l, "hostname=") {
+				t.Errorf("profile %q carries %s", n, l)
+			}
+		}
+	}
+}
+
+// Unset, no profiler.
+func TestProfilerOffWithoutAddress(t *testing.T) {
+	t.Setenv(ProfileAddressEnv, "")
+	if stop := startProfiler(nil); stop != nil {
+		t.Error("a profiler started with no address")
+	}
+}
