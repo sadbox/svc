@@ -1,17 +1,20 @@
 // Package telemetry sets up OpenTelemetry metrics and traces for sadbox's
-// services, exported over OTLP/HTTP to the host's Alloy, and gives them the
+// services, exported over OTLP/HTTP to the host's Alloy, continuous
+// profiles (Pyroscope's push, to the same Alloy), and gives them the
 // few helpers they share: an instrumented HTTP handler and transport, and
 // [Job] for background work.
 //
 // Configuration is the standard OTEL_* environment, read by the upstream
-// SDK and exporters; nothing here adds a variable of its own:
+// SDK and exporters, plus [ProfileAddressEnv] for profiles (OpenTelemetry
+// has no stable profiles signal):
 //
 //	OTEL_EXPORTER_OTLP_ENDPOINT=http://10.89.2.1:4318
 //	OTEL_RESOURCE_ATTRIBUTES=service.namespace=sadbox,service.instance.id=bonnet,deployment.environment.name=prod
+//	PYROSCOPE_SERVER_ADDRESS=http://10.89.2.1:4040
 //
 // With no OTLP endpoint set (tests, local runs) or OTEL_SDK_DISABLED=true,
-// [Start] installs nothing: the global providers stay OpenTelemetry's
-// no-ops and every helper here costs next to nothing.
+// [Start] installs nothing, profiler included: the global providers stay
+// OpenTelemetry's no-ops and every helper here costs next to nothing.
 //
 // What leaves the process is bounded and redacted in one place, so a
 // service can't leak by forgetting: spans lose raw URLs, paths, queries,
@@ -85,12 +88,13 @@ func WithVersion(v string) Option {
 }
 
 // Start installs the global MeterProvider, TracerProvider and W3C trace
-// context propagator, and starts the Go runtime metrics. service is the
+// context propagator, starts the Go runtime metrics and, with
+// [ProfileAddressEnv] set, the continuous profiler. service is the
 // default service.name; OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES
 // override it. [WithVersion] gives service.version.
 //
-// The returned function flushes and stops both providers (bounded by a few
-// seconds); call it on the way out. When export isn't enabled ([Enabled])
+// The returned function flushes and stops both providers and the profiler
+// (together, bounded by a few seconds); call it on the way out. When export isn't enabled ([Enabled])
 // Start installs nothing and returns a no-op.
 //
 // Export failures (the collector down) never fail the service: the SDK
@@ -161,11 +165,28 @@ func Start(ctx context.Context, service string, opts ...Option) (shutdown func()
 		slog.Warn("telemetry: initial export", "err", scrubURLs(err.Error()))
 	}
 
+	stopProfiler := startProfiler(res)
+
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
+		// The profiler's last upload runs alongside the providers' flush,
+		// not after it, so a stop stays within shutdownTimeout (its client
+		// has the same timeout) and well inside the unit's StopTimeout.
+		profilerDone := make(chan struct{})
+		go func() {
+			defer close(profilerDone)
+			if stopProfiler != nil {
+				stopProfiler()
+			}
+		}()
 		if err := errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx)); err != nil {
 			slog.Warn("telemetry: shutdown", "err", scrubURLs(err.Error()))
+		}
+		select {
+		case <-profilerDone:
+		case <-ctx.Done():
+			slog.Warn("telemetry: profiler stop timed out")
 		}
 	}, nil
 }
