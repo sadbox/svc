@@ -304,12 +304,16 @@ func TestTransport(t *testing.T) {
 		t.Error("client span lacks peer.service")
 	}
 
-	pts := histPoints(t, h.metrics(t)["http.client.request.duration"])
-	if len(pts) != 1 {
-		t.Fatalf("got %d client duration points", len(pts))
+	// This test's points: the meter provider is shared (harness), and
+	// other tests make client requests too, as other peers.
+	var pts []metricdata.HistogramDataPoint[float64]
+	for _, p := range histPoints(t, h.metrics(t)["http.client.request.duration"]) {
+		if v, _ := p.Attributes.Value(PeerService); v.AsString() == "discord" {
+			pts = append(pts, p)
+		}
 	}
-	if v, _ := pts[0].Attributes.Value(PeerService); v.AsString() != "discord" {
-		t.Errorf("peer.service = %q", v.AsString())
+	if len(pts) != 1 {
+		t.Fatalf("got %d discord client duration points", len(pts))
 	}
 	for _, k := range attrKeys(pts[0].Attributes) {
 		if !hasKey(allow(clientMetricKeys), attribute.Key(k)) {
