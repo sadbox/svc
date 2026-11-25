@@ -58,7 +58,12 @@ needs redacting; don't add pprof labels holding IDs or content.
 - Outbound HTTP: `telemetry.Transport("<peer>", base)` (or `Client`) on
   every client that calls a dependency, `<peer>` a fixed name (`discord`,
   `s3`, `ringcentral`, `graph`, `pushover`, ...). No trace context is sent
-  to third parties.
+  to third parties; only the CONNECT to the outbound proxy (egress) carries
+  the client span's `traceparent`, so egress's span for it is that span's
+  child (when `base` is an `*http.Transport`; Transport uses a copy). Each
+  client span records its connection: `http.connection.reused` and
+  `network.local.address`/`network.local.port` (egress's
+  `egress.source.port`), so a request on a reused tunnel finds its CONNECT.
 - Background work: one `telemetry.NewJob("<name>")` per loop, task or
   heartbeat condition; `Run` around each pass, or `Succeeded` where a
   condition (not a run) used to ping a heartbeat.
