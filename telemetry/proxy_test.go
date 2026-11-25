@@ -168,3 +168,61 @@ func TestTransportOtherBase(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// opaqueTransport hides its *http.Transport, as the AWS SDK's redirect
+// wrapper does.
+type opaqueTransport struct{ next http.RoundTripper }
+
+func (o opaqueTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return o.next.RoundTrip(r)
+}
+
+// TraceConnects gives a transport under a wrapper the same CONNECT trace
+// Transport gives an *http.Transport base: the client span's.
+func TestTraceConnectsUnderAWrapper(t *testing.T) {
+	h := newHarness(t)
+	up := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer up.Close()
+	proxy := &connectProxy{}
+	ps := httptest.NewServer(proxy)
+	defer ps.Close()
+	pu, _ := url.Parse(ps.URL)
+
+	inner := &http.Transport{
+		Proxy:              http.ProxyURL(pu),
+		TLSClientConfig:    &tls.Config{RootCAs: up.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs},
+		ProxyConnectHeader: http.Header{"X-Egress-Purpose": {"fetch"}},
+	}
+	TraceConnects(inner)
+	c := &http.Client{Transport: Transport("wrapped", opaqueTransport{inner}), Timeout: 5 * time.Second}
+
+	ctx, parent := otel.Tracer("t").Start(context.Background(), "parent")
+	req, _ := http.NewRequestWithContext(ctx, "GET", up.URL+"/x", nil)
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	parent.End()
+
+	connects := proxy.seen()
+	if len(connects) != 1 {
+		t.Fatalf("%d CONNECTs, want 1", len(connects))
+	}
+	if got := connects[0].header.Get("X-Egress-Purpose"); got != "fetch" {
+		t.Errorf("CONNECT lost the transport's own proxy header: X-Egress-Purpose %q", got)
+	}
+	var client sdktrace.ReadOnlySpan
+	for _, s := range h.spans.GetSpans().Snapshots() {
+		if s.Name() == "wrapped GET" {
+			client = s
+		}
+	}
+	if client == nil {
+		t.Fatal("no client span")
+	}
+	sc := trace.SpanContextFromContext(propagation.TraceContext{}.Extract(context.Background(), propagation.HeaderCarrier(connects[0].header)))
+	if sc.SpanID() != client.SpanContext().SpanID() || sc.TraceID() != parent.SpanContext().TraceID() {
+		t.Errorf("CONNECT traceparent %s/%s, want the client span's %s/%s", sc.TraceID(), sc.SpanID(), client.SpanContext().TraceID(), client.SpanContext().SpanID())
+	}
+}

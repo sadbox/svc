@@ -60,7 +60,9 @@ needs redacting; don't add pprof labels holding IDs or content.
   `s3`, `ringcentral`, `graph`, `pushover`, ...). No trace context is sent
   to third parties; only the CONNECT to the outbound proxy (egress) carries
   the client span's `traceparent`, so egress's span for it is that span's
-  child (when `base` is an `*http.Transport`; Transport uses a copy). Each
+  child (when `base` is an `*http.Transport`; Transport uses a copy; for an
+  `*http.Transport` under a wrapper, such as the AWS SDK's, call
+  `telemetry.TraceConnects` on it and keep `Transport` around the client). Each
   client span records its connection: `http.connection.reused` and
   `network.local.address`/`network.local.port` (egress's
   `egress.source.port`), so a request on a reused tunnel finds its CONNECT.
