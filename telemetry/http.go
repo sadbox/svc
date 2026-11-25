@@ -104,8 +104,21 @@ func proxyTraceparent(base http.RoundTripper) http.RoundTripper {
 		return base
 	}
 	c := t.Clone()
+	TraceConnects(c)
+	return c
+}
+
+// TraceConnects makes t's CONNECTs to its proxy carry the traceparent of the
+// request's span, after t's own proxy headers (ProxyConnectHeader, or its
+// GetProxyConnectHeader's), as [Transport] does for an *http.Transport base.
+// It is for a client whose *http.Transport sits under a wrapper [Transport]
+// can't see through, such as the AWS SDK's (through
+// awshttp.BuildableClient.WithTransportOptions); the client's spans still
+// come from [Transport] or [Client] around the whole client. It changes t
+// in place: call it before t's first request.
+func TraceConnects(t *http.Transport) {
 	static, dynamic := t.ProxyConnectHeader, t.GetProxyConnectHeader
-	c.GetProxyConnectHeader = func(ctx context.Context, proxy *url.URL, target string) (http.Header, error) {
+	t.GetProxyConnectHeader = func(ctx context.Context, proxy *url.URL, target string) (http.Header, error) {
 		h := static
 		if dynamic != nil {
 			var err error
@@ -122,7 +135,6 @@ func proxyTraceparent(base http.RoundTripper) http.RoundTripper {
 		propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(h))
 		return h, nil
 	}
-	return c
 }
 
 // connTransport records the connection a request got on its client span.
