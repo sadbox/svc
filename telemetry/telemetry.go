@@ -116,7 +116,7 @@ func Start(ctx context.Context, service string, opts ...Option) (shutdown func()
 	// Loud, once per start: series with no version can't be told apart by
 	// build, and nothing else would show that a build lost its version.
 	if _, ok := res.Set().Value(semconv.ServiceVersionKey); !ok {
-		slog.Warn("telemetry: no service.version: pass telemetry.WithVersion (this build has no VCS revision either)")
+		slog.WarnContext(ctx, "telemetry: no service.version: pass telemetry.WithVersion (this build has no VCS revision either)")
 	}
 
 	spanExp, err := otlptracehttp.New(ctx)
@@ -142,9 +142,7 @@ func Start(ctx context.Context, service string, opts ...Option) (shutdown func()
 		sdkmetric.WithView(views()...),
 	)
 
-	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
-		slog.Warn("telemetry: export", "err", scrubURLs(err.Error()))
-	}))
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(logExportError))
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
@@ -162,7 +160,7 @@ func Start(ctx context.Context, service string, opts ...Option) (shutdown func()
 	fctx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()
 	if err := mp.ForceFlush(fctx); err != nil {
-		slog.Warn("telemetry: initial export", "err", scrubURLs(err.Error()))
+		slog.WarnContext(ctx, "telemetry: initial export", "err", scrubURLs(err.Error()))
 	}
 
 	stopProfiler := startProfiler(res)
@@ -181,14 +179,21 @@ func Start(ctx context.Context, service string, opts ...Option) (shutdown func()
 			}
 		}()
 		if err := errors.Join(tp.Shutdown(ctx), mp.Shutdown(ctx)); err != nil {
-			slog.Warn("telemetry: shutdown", "err", scrubURLs(err.Error()))
+			slog.WarnContext(ctx, "telemetry: shutdown", "err", scrubURLs(err.Error()))
 		}
 		select {
 		case <-profilerDone:
 		case <-ctx.Done():
-			slog.Warn("telemetry: profiler stop timed out")
+			slog.WarnContext(ctx, "telemetry: profiler stop timed out")
 		}
 	}, nil
+}
+
+// logExportError is the SDK's error handler. It outlives Start and runs on
+// the SDK's export goroutines, not for any request, so it has no context:
+// Start's (and whatever span that carries) is not this error's.
+func logExportError(err error) {
+	slog.Warn("telemetry: export", "err", scrubURLs(err.Error()))
 }
 
 // newResource describes the process: service.name (the default given,

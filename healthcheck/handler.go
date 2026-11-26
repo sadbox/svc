@@ -96,7 +96,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(body)
+	// The status is already sent; a failed write (the client gone) has no
+	// one left to tell.
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 // logChanges logs each check whose state differs from the last request's.
