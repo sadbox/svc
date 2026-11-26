@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"errors"
 	"log"
 	"log/slog"
 	"os"
@@ -91,8 +92,8 @@ func TestInitAndFatal(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &stdout, &stderr
 			err := cmd.Run()
-			exit, ok := err.(*exec.ExitError)
-			if !ok || exit.ExitCode() != 1 {
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
 				t.Fatalf("exit %v, want 1; stderr:\n%s", err, stderr.String())
 			}
 			if got := stdout.String(); got != "stdout stays clean\n" {

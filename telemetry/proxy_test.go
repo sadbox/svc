@@ -138,7 +138,7 @@ func TestTransportProxyTraceparent(t *testing.T) {
 			a[kv.Key] = kv.Value
 		}
 		if want := i == 1; a[ConnReused].Type() != attribute.BOOL || a[ConnReused].AsBool() != want {
-			t.Errorf("request %d: %s = %v, want %v", i+1, ConnReused, a[ConnReused].Emit(), want)
+			t.Errorf("request %d: %s = %v, want %v", i+1, ConnReused, a[ConnReused].String(), want)
 		}
 		if got := strconv.FormatInt(a["network.local.port"].AsInt64(), 10); got != proxySidePort {
 			t.Errorf("request %d: network.local.port %s, want %s (the proxy's view of the client)", i+1, got, proxySidePort)

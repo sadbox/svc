@@ -1,6 +1,7 @@
 package healthcheck
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ func countingServer(t *testing.T, status int) (*httptest.Server, *atomic.Int32) 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		n.Add(1)
 		w.WriteHeader(status)
-		w.Write([]byte("body text\n"))
+		_, _ = w.Write([]byte("body text\n"))
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &n
@@ -99,7 +100,7 @@ func TestRun(t *testing.T) {
 
 	// Headers at once, then a body that never finishes.
 	stall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("partial"))
+		_, _ = w.Write([]byte("partial"))
 		w.(http.Flusher).Flush()
 		select {
 		case <-release:
@@ -206,7 +207,8 @@ func TestMainProcess(t *testing.T) {
 			cmd.Env = append(os.Environ(), "HEALTHCHECK_TEST_CHILD="+tc.url, "HEALTHCHECK_TEST_ARGS="+tc.args)
 			out, err := cmd.CombinedOutput()
 			code := 0
-			if exit, ok := err.(*exec.ExitError); ok {
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
 				code = exit.ExitCode()
 			} else if err != nil {
 				t.Fatal(err)
