@@ -97,9 +97,11 @@ func WithVersion(v string) Option {
 // (together, bounded by a few seconds); call it on the way out. When export isn't enabled ([Enabled])
 // Start installs nothing and returns a no-op.
 //
-// Export failures (the collector down) never fail the service: the SDK
-// drops what it can't send and reports through [otel.SetErrorHandler],
-// which Start points at slog.
+// Export failures (the collector down) never fail the service: an export
+// the collector refuses (it is restarting) is tried again for 20 seconds
+// ([refusedRetry]); past that, and for any other failure, the SDK drops
+// what it can't send and reports through [otel.SetErrorHandler], which
+// Start points at slog.
 func Start(ctx context.Context, service string, opts ...Option) (shutdown func(), err error) {
 	if !Enabled() {
 		return func() {}, nil
@@ -128,17 +130,18 @@ func Start(ctx context.Context, service string, opts ...Option) (shutdown func()
 		return nil, fmt.Errorf("telemetry: metric exporter: %w", err)
 	}
 
+	retry := newRefusedRetry()
 	// The sampler is the SDK's default (parent-based, always on), unless
 	// OTEL_TRACES_SAMPLER says otherwise: the SDK reads it.
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithBatcher(redactingExporter{spanExp}),
+		sdktrace.WithBatcher(redactingExporter{retryingSpanExporter{spanExp, retry}}),
 	)
 	// The export interval is OTEL_METRIC_EXPORT_INTERVAL (default 60s),
 	// read by the reader.
 	mp := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp)),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(retryingMetricExporter{metricExp, retry})),
 		sdkmetric.WithView(views()...),
 	)
 
@@ -162,10 +165,12 @@ func Start(ctx context.Context, service string, opts ...Option) (shutdown func()
 	if err := mp.ForceFlush(fctx); err != nil {
 		slog.WarnContext(ctx, "telemetry: initial export", "err", scrubURLs(err.Error()))
 	}
+	retry.on.Store(true)
 
 	stopProfiler := startProfiler(res)
 
 	return func() {
+		retry.on.Store(false)
 		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		// The profiler's last upload runs alongside the providers' flush,
